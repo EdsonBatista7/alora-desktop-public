@@ -20,9 +20,7 @@ The pairing code expires after ten minutes and works once. The desktop device to
 
 ## Development
 
-Install the pinned dependencies with `npm ci`, run `npm start`, and package a Windows x64 installer with `npm run dist:win` on a Windows host. Public releases require a trusted Windows code-signing certificate configured through the standard `WIN_CSC_LINK`/`CSC_LINK` and `CSC_KEY_PASSWORD` environment variables; the private key must never be committed. The build fails when signing is unavailable, then verifies the installer and app executable with Authenticode and a timestamp before succeeding. The app deliberately has no Node.js or developer-tools access from its renderer.
-
-The Alora profile also provides an unsigned preview installer. Windows SmartScreen and some browsers may display warnings because the preview has no Authenticode publisher signature. Download only from the official Alora profile and verify its SHA-256 checksum before installing. `npm run dist:win:unsigned` reproduces that preview; `npm run dist:win` remains signature-required for trusted releases.
+Install the pinned dependencies with `npm ci`, run `npm start`, and package a Windows x64 installer with `npm run dist:win` on a Windows host. Trusted releases require a code-signing certificate configured through `WIN_CSC_LINK`/`CSC_LINK` and `CSC_KEY_PASSWORD`; the private key must never be committed. The signed build fails when signing is unavailable and verifies Authenticode and a timestamp before succeeding. `npm run dist:win:unsigned` builds the explicitly labeled preview only. Windows SmartScreen and some browsers may warn because it has no Authenticode publisher signature; download only from Alora's official profile and verify the SHA-256 checksum shown there. The app deliberately has no Node.js or developer-tools access from its renderer.
 
 ## OpenAI flow
 
