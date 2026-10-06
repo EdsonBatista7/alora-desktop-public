@@ -1,0 +1,34 @@
+name: Windows package verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build unsigned verification package
+        run: npm run dist:win:unsigned
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify the unsigned package is not published by CI
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath release-final -Filter 'Alora-Desktop-Setup-*-x64.exe' -File
+          if (-not $installer) { throw 'Electron Builder did not produce the expected installer.' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer[0].FullName
+          if ($signature.Status -ne 'NotSigned') { throw 'The verification package must remain unsigned.' }
+          Write-Host "Built $($installer[0].Name) ($($installer[0].Length) bytes). This CI job does not publish it."

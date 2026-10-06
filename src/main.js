@@ -1,0 +1,380 @@
+import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createServer } from 'node:http';
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+const APP_VERSION = app.getVersion();
+const ALORA_API = 'https://app.sintoniaads.com';
+const OPENAI_AUTH = 'https://auth.openai.com';
+const OPENAI_RESOURCE = 'https://api.openai.com/v1';
+const CALLBACK_PATH = '/auth/callback';
+const SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+let mainWindow;
+let encryptedState = null;
+let account = null;
+let hostId = randomUUID();
+let polling = false;
+let pollRequested = false;
+let refreshPromise = null;
+let currentStatus = { paired: false, signedIn: false, enabled: false, models: [], error: '' };
+
+const statePath = () => path.join(app.getPath('userData'), 'alora-secure-state.json');
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const base64url = (value) => Buffer.from(value).toString('base64url');
+const safeMessage = (value) => String(value?.message ?? value ?? 'Falha de comunicação.').replace(/[\r\n]/g, ' ').slice(0, 260);
+
+async function persist() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('O Windows não disponibilizou a proteção local de credenciais (DPAPI).');
+  const record = { hostId, account, deviceId: encryptedState?.deviceId ?? null, deviceToken: encryptedState?.deviceToken ?? null };
+  const encrypted = safeStorage.encryptString(JSON.stringify(record)).toString('base64');
+  const target = statePath(), temporary = `${target}.tmp`;
+  await writeFile(temporary, JSON.stringify({ encrypted }), { mode: 0o600 });
+  await rename(temporary, target);
+}
+
+async function restore() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return;
+    const file = JSON.parse(await readFile(statePath(), 'utf8'));
+    const record = JSON.parse(safeStorage.decryptString(Buffer.from(file.encrypted, 'base64')));
+    if (typeof record.hostId === 'string') hostId = record.hostId;
+    account = record.account ?? null;
+    encryptedState = { deviceId: record.deviceId ?? null, deviceToken: record.deviceToken ?? null };
+  } catch { encryptedState = { deviceId: null, deviceToken: null }; }
+  if (!encryptedState) encryptedState = { deviceId: null, deviceToken: null };
+}
+
+function setStatus(patch) {
+  currentStatus = { ...currentStatus, ...patch };
+  mainWindow?.webContents.send('alora:state-changed', currentStatus);
+}
+
+async function requestJson(url, init = {}) {
+  const response = await fetch(url, { ...init, headers: { Accept: 'application/json', ...(init.headers ?? {}) } });
+  const text = await response.text();
+  let body = {};
+  if (text) { try { body = JSON.parse(text); } catch { throw new Error('A Alora devolveu uma resposta inválida.'); } }
+  if (!response.ok) throw new Error(body.error ?? `Falha HTTP ${response.status}.`);
+  return body;
+}
+
+async function aloraRequest(pathname, init = {}) {
+  if (!encryptedState?.deviceToken) throw new Error('Pareie o computador com a Alora primeiro.');
+  return requestJson(`${ALORA_API}/api/local-agent${pathname}`, {
+    ...init,
+    headers: { Authorization: `Device ${encryptedState.deviceToken}`, ...(init.headers ?? {}) },
+  });
+}
+
+function randomVerifier() { return base64url(randomBytes(32)); }
+
+async function waitForCallback(server, callback) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { server.close(); reject(new Error('O login expirou. Tente conectar novamente.')); }, 180_000);
+    server.on('request', (request, response) => {
+      const callbackUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+      if (request.method !== 'GET' || callbackUrl.pathname !== CALLBACK_PATH) {
+        response.writeHead(404).end('Not found'); return;
+      }
+      const returnedState = callbackUrl.searchParams.get('state') ?? '';
+      if (!callback.state || returnedState.length !== callback.state.length
+        || !timingSafeEqual(Buffer.from(returnedState), Buffer.from(callback.state))) {
+        response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Estado de login inválido. Feche esta aba.');
+        clearTimeout(timer); server.close(); reject(new Error('O estado de segurança do login não corresponde.')); return;
+      }
+      const error = callbackUrl.searchParams.get('error');
+      const code = callbackUrl.searchParams.get('code');
+      const issuedClientId = callbackUrl.searchParams.get('client_id') ?? callback.clientId;
+      response.writeHead(error ? 400 : 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end('<!doctype html><meta charset="utf-8"><title>Alora Desktop</title><p>Login concluído. Você já pode fechar esta janela e voltar ao Alora Desktop.</p>');
+      clearTimeout(timer); server.close();
+      if (error) reject(new Error(error === 'access_denied' ? 'O acesso ao plano do ChatGPT não foi autorizado.' : `Login recusado (${error}).`));
+      else if (!code || !issuedClientId || issuedClientId === 'dynamic_agent_client') reject(new Error('O registro do aplicativo não foi concluído pelo OpenAI.'));
+      else resolve({ code, clientId: issuedClientId });
+    });
+  });
+}
+
+async function discoverOpenAI() {
+  const response = await fetch(`${OPENAI_AUTH}/.well-known/openid-configuration`, { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error('Não foi possível validar a identidade do ChatGPT.');
+  return response.json();
+}
+
+async function exchangeToken(fields) {
+  const body = new URLSearchParams(fields);
+  const response = await fetch(`${OPENAI_AUTH}/api/accounts/oauth/token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body,
+  });
+  const raw = await response.text(); let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { /* sanitized below */ }
+  if (!response.ok) throw new Error(payload.error_description ?? payload.error ?? `Login falhou (HTTP ${response.status}).`);
+  return payload;
+}
+
+async function signIn() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('A proteção de credenciais do Windows está indisponível.');
+  const oauthState = base64url(randomBytes(32));
+  const nonce = base64url(randomBytes(32));
+  const verifier = randomVerifier();
+  const challenge = base64url(createHash('sha256').update(verifier).digest());
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Não consegui abrir o retorno local do login.');
+  const redirectUri = `http://127.0.0.1:${address.port}${CALLBACK_PATH}`;
+  const returning = !!account?.clientId;
+  const pending = { state: oauthState, clientId: returning ? account.clientId : undefined };
+  const authorization = new URL(`${OPENAI_AUTH}/api/accounts/authorize`);
+  const params = {
+    client_id: returning ? account.clientId : 'dynamic_agent_client',
+    response_type: 'code', redirect_uri: redirectUri, scope: SCOPES,
+    resource: OPENAI_RESOURCE, state: oauthState, nonce,
+    code_challenge_method: 'S256', code_challenge: challenge,
+    ext_agent_host_id: `urn:uuid:${hostId}`,
+  };
+  if (!returning) params.agent_name_hint = 'Alora Desktop';
+  else if (account.idToken) params.id_token_hint = account.idToken;
+  else if (account.email) params.login_hint = account.email;
+  for (const [key, value] of Object.entries(params)) authorization.searchParams.set(key, value);
+  const callbackPromise = waitForCallback(server, pending);
+  try {
+    await shell.openExternal(authorization.toString());
+    const { code, clientId } = await callbackPromise;
+    if (returning && clientId !== account.clientId) throw new Error('O login retornou uma conta diferente da selecionada.');
+    const tokens = await exchangeToken({ grant_type: 'authorization_code', client_id: clientId, code,
+      code_verifier: verifier, redirect_uri: redirectUri, resource: OPENAI_RESOURCE });
+    const scopes = String(tokens.scope ?? '').split(/\s+/).filter(Boolean);
+    if (!scopes.includes('chatgpt.tokens.use.direct') || !scopes.includes('resource.invoke'))
+      throw new Error('O ChatGPT não concedeu a permissão necessária para executar tarefas no plano.');
+    const discovery = await discoverOpenAI();
+    if (!discovery.jwks_uri) throw new Error('Não foi possível validar o retorno seguro do OpenAI.');
+    const keys = createRemoteJWKSet(new URL(discovery.jwks_uri));
+    const verified = await jwtVerify(tokens.id_token, keys, { issuer: 'https://auth.openai.com', audience: clientId, nonce });
+    const claims = verified.payload;
+    if (returning && account?.subject && claims.sub !== account.subject)
+      throw new Error('A identidade autenticada não corresponde à conta ChatGPT já vinculada.');
+    account = {
+      clientId, subject: claims.sub, email: typeof claims.email === 'string' ? claims.email : '',
+      displayName: typeof claims.name === 'string' ? claims.name : '', idToken: tokens.id_token,
+      accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
+      expiresAt: Date.now() + Number(tokens.expires_in ?? 3600) * 1000,
+      scopes, models: [],
+    };
+    await persist();
+    const models = await listModels();
+    account.models = models;
+    await persist();
+    setStatus({ signedIn: true, email: account.email, displayName: account.displayName, models, error: '' });
+    return currentStatus;
+  } catch (error) {
+    server.close(); throw error;
+  }
+}
+
+async function accessToken(force = false) {
+  if (!account?.refreshToken || !account?.clientId) throw Object.assign(new Error('Faça login novamente no ChatGPT.'), { code: 'oauth_reauth_required' });
+  if (!force && account.accessToken && account.expiresAt > Date.now() + 90_000) return account.accessToken;
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const tokens = await exchangeToken({ grant_type: 'refresh_token', client_id: account.clientId,
+        refresh_token: account.refreshToken, resource: OPENAI_RESOURCE });
+      account.accessToken = tokens.access_token;
+      account.refreshToken = tokens.refresh_token;
+      account.expiresAt = Date.now() + Number(tokens.expires_in ?? 3600) * 1000;
+      account.scopes = String(tokens.scope ?? account.scopes.join(' ')).split(/\s+/).filter(Boolean);
+      if (!account.scopes.includes('chatgpt.tokens.use.direct')) throw new Error('A permissão de uso do plano não está mais ativa.');
+      await persist();
+      return account.accessToken;
+    } catch (error) {
+      if (error.code === 'invalid_grant' || error.code === 'invalid_refresh_token') {
+        setStatus({ signedIn: false, enabled: false, error: 'A sessão do ChatGPT expirou. Conecte a conta novamente.' });
+        account.accessToken = ''; account.refreshToken = ''; await persist();
+        throw Object.assign(new Error('Faça login novamente no ChatGPT.'), { code: 'oauth_reauth_required' });
+      }
+      throw error;
+    } finally { refreshPromise = null; }
+  })();
+  return refreshPromise;
+}
+
+async function listModels() {
+  const token = await accessToken();
+  const body = await requestJson(`${OPENAI_RESOURCE}/models`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!Array.isArray(body.models)) throw new Error('O catálogo do ChatGPT veio em formato inesperado.');
+  return body.models.filter((item) => item?.visibility === 'list' && typeof item.slug === 'string')
+    .map((item) => ({ slug: item.slug, displayName: String(item.display_name ?? item.slug).slice(0, 100) })).slice(0, 200);
+}
+
+async function pair(code) {
+  if (!/^[A-Za-z0-9_-]{20,40}$/.test(String(code ?? '').trim())) throw new Error('Cole o código de pareamento gerado em Alora → Perfil.');
+  const result = await requestJson(`${ALORA_API}/api/local-agent/device/pair`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: String(code).trim(), name: app.getName() === 'Electron' ? 'Este computador' : app.getName(), appVersion: APP_VERSION }),
+  });
+  encryptedState = { deviceId: result.deviceId, deviceToken: result.deviceToken };
+  await persist();
+  setStatus({ paired: true, deviceId: result.deviceId, enabled: false, error: '' });
+  return currentStatus;
+}
+
+async function postJobResult(job, value) {
+  await aloraRequest('/device/result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: job.id, claimId: job.claimId, ...value }) });
+}
+
+async function runInference(job) {
+  try {
+    const token = await accessToken();
+    const payload = { ...(job.body ?? {}), store: false, stream: true };
+    delete payload.previous_response_id;
+    delete payload.background;
+    const response = await fetch(`${OPENAI_RESOURCE}/responses`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(110_000),
+    });
+    if (!response.ok) {
+      let error = {};
+      try { error = await response.json(); } catch { /* safe fallback */ }
+      const code = String(error.error?.code ?? error.error?.type ?? `http_${response.status}`).slice(0, 120);
+      await postJobResult(job, { error: { code } }); return;
+    }
+    if (!response.body) throw new Error('stream_missing');
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = '', bytes = 0, completed = null, failure = null;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error('response_too_large');
+      buffer += decoder.decode(value, { stream: true });
+      let end;
+      while (true) {
+        const lfEnd = buffer.indexOf('\n\n');
+        const crlfEnd = buffer.indexOf('\r\n\r\n');
+        if (lfEnd < 0 && crlfEnd < 0) break;
+        const useCrLf = crlfEnd >= 0 && (lfEnd < 0 || crlfEnd <= lfEnd);
+        end = useCrLf ? crlfEnd : lfEnd;
+        const frame = buffer.slice(0, end).replace(/\r$/gm, '');
+        buffer = buffer.slice(end + (useCrLf ? 4 : 2));
+        let eventName = '', data = '';
+        for (const line of frame.split(/\r?\n/)) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += `${line.slice(5).trim()}\n`;
+        }
+        if (!data.trim()) continue;
+        let event; try { event = JSON.parse(data); } catch { continue; }
+        const type = String(event.type ?? eventName);
+        if (type === 'response.failed') failure = event.response?.error ?? event.error ?? { code: 'response_failed' };
+        if (type === 'response.incomplete') failure = { code: 'response_incomplete' };
+        if (type === 'response.completed') completed = event.response ?? event;
+      }
+    }
+    if (failure) {
+      await postJobResult(job, { error: { code: String(failure.code ?? failure.type ?? 'response_failed').slice(0, 120) } }); return;
+    }
+    if (!completed || completed.status !== 'completed') {
+      await postJobResult(job, { error: { code: 'stream_ended_before_completion' } }); return;
+    }
+    await postJobResult(job, { response: completed });
+  } catch (error) {
+    const code = String(error?.code ?? (error?.name === 'TimeoutError' ? 'request_timeout' : 'local_executor_error')).slice(0, 120);
+    try { await postJobResult(job, { error: { code } }); } catch { /* Alora expires an unacknowledged job; never replay it. */ }
+  }
+}
+
+async function doPoll() {
+  if (polling) { pollRequested = true; return; }
+  polling = true;
+  try {
+    if (!encryptedState?.deviceToken) { setStatus({ paired: false, signedIn: !!account, enabled: false }); return; }
+    let models = [];
+    if (account?.refreshToken) {
+      try {
+        if (!account.models?.length || account.modelsAt < Date.now() - 5 * 60_000) {
+          account.models = await listModels(); account.modelsAt = Date.now(); await persist();
+        }
+        models = account.models;
+      } catch (error) {
+        const needsSignin = error.code === 'oauth_reauth_required';
+        setStatus({ signedIn: !needsSignin, enabled: false, error: safeMessage(error) });
+      }
+    }
+    const state = await aloraRequest('/device/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models, appVersion: APP_VERSION }) });
+    setStatus({ paired: true, signedIn: !!account?.refreshToken, email: account?.email ?? '',
+      displayName: account?.displayName ?? '', models, enabled: state.enabled,
+      selectedModel: state.selectedModel, online: true, error: currentStatus.error || '' });
+    if (state.job) {
+      setStatus({ busy: true }); await runInference(state.job); setStatus({ busy: false });
+    }
+  } catch (error) {
+    const message = safeMessage(error);
+    if (/revogado/i.test(message)) { encryptedState = { deviceId: null, deviceToken: null }; await persist(); setStatus({ paired: false, enabled: false }); }
+    else setStatus({ online: false, error: message });
+  } finally {
+    polling = false;
+    const requested = pollRequested; pollRequested = false;
+    setTimeout(() => { void doPoll(); }, requested ? 150 : 2_500);
+  }
+}
+
+async function logout() {
+  const previous = account;
+  if (previous?.refreshToken) {
+    try {
+      const discovery = await discoverOpenAI();
+      if (discovery.revocation_endpoint) {
+        await fetch(discovery.revocation_endpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: previous.refreshToken, token_type_hint: 'refresh_token', client_id: previous.clientId }) });
+      }
+    } catch { /* local sign-out still clears local credentials */ }
+  }
+  account = null; await persist();
+  setStatus({ signedIn: false, email: '', displayName: '', models: [], error: '' });
+  void doPoll();
+  return currentStatus;
+}
+
+async function updateDevice(body) {
+  if (!encryptedState?.deviceId) throw new Error('Pareie o computador com a Alora primeiro.');
+  const pathname = `/devices/${encodeURIComponent(encryptedState.deviceId)}`;
+  await aloraRequest(pathname, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  void doPoll(); return currentStatus;
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 760, height: 720, minWidth: 620, minHeight: 600,
+    title: 'Alora Desktop', backgroundColor: '#f7f8fc',
+    webPreferences: { preload: path.join(app.getAppPath(), 'src/preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: false },
+  });
+  const localUi = pathToFileURL(path.join(app.getAppPath(), 'src/index.html')).href;
+  mainWindow.webContents.on('will-navigate', (event, target) => { if (target !== localUi) event.preventDefault(); });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  void mainWindow.loadFile(path.join(app.getAppPath(), 'src/index.html'));
+  mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+app.whenReady().then(async () => {
+  await restore();
+  createWindow();
+  currentStatus = { ...currentStatus, paired: !!encryptedState?.deviceToken, signedIn: !!account?.refreshToken,
+    email: account?.email ?? '', displayName: account?.displayName ?? '', models: account?.models ?? [] };
+  ipcMain.handle('alora:state', () => currentStatus);
+  ipcMain.handle('alora:pair', async (_event, code) => { const result = await pair(code); void doPoll(); return result; });
+  ipcMain.handle('alora:signin', () => signIn());
+  ipcMain.handle('alora:signout', () => logout());
+  ipcMain.handle('alora:model', (_event, slug) => updateDevice({ selectedModel: slug }));
+  ipcMain.handle('alora:enable', (_event, enabled) => updateDevice({ enabled: !!enabled }));
+  void doPoll();
+});
+
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

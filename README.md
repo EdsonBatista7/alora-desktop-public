@@ -1,0 +1,29 @@
+# Alora Desktop
+
+Alora Desktop is a small, open-source Windows companion that runs text-generation tasks on the user's computer. The user signs in with ChatGPT in their browser, and the app calls OpenAI's public Responses API directly with that local session. The Alora server only queues brand-scoped text work and receives the final response; it never receives a ChatGPT access or refresh token.
+
+## User setup
+
+1. Install Alora Desktop and open it.
+2. In Alora, open **Profile → Local executor**, create a temporary pairing code, and paste it into the desktop app.
+3. Choose **Continue with ChatGPT**, review the OpenAI permission screen, and return to Alora Desktop.
+4. Choose an available model and enable the local executor.
+
+The pairing code expires after ten minutes and works once. The desktop device token and all OAuth credentials are stored together using Electron `safeStorage` (Windows DPAPI). Signing out attempts to revoke the renewable session and clears its local copy.
+
+## Boundaries
+
+- Text-only tasks are supported. Image generation and image-input requests continue through the existing Alora provider path.
+- A task reaches the computer only while the app is running, online, paired, and enabled. Otherwise Alora falls back to its configured provider.
+- A positively identified ChatGPT plan usage limit falls back to the configured provider. Interrupted or ambiguous requests are not replayed.
+- The signed-in user's ChatGPT plan limits are shared with their other apps. The Alora connection is per user and per computer, not an organization-wide pool.
+
+## Development
+
+Install the pinned dependencies with `npm ci`, run `npm start`, and package a Windows x64 installer with `npm run dist:win` on a Windows host. Public releases require a trusted Windows code-signing certificate configured through the standard `WIN_CSC_LINK`/`CSC_LINK` and `CSC_KEY_PASSWORD` environment variables; the private key must never be committed. The build fails when signing is unavailable, then verifies the installer and app executable with Authenticode and a timestamp before succeeding. The app deliberately has no Node.js or developer-tools access from its renderer.
+
+The Alora profile also provides an unsigned preview installer. Windows SmartScreen and some browsers may display warnings because the preview has no Authenticode publisher signature. Download only from the official Alora profile and verify its SHA-256 checksum before installing. `npm run dist:win:unsigned` reproduces that preview; `npm run dist:win` remains signature-required for trusted releases.
+
+## OpenAI flow
+
+This app uses Sign in with ChatGPT's open-source client registration and public Responses API flow, including PKCE, nonce/state validation, OpenID token verification, the `chatgpt.tokens.use.direct` permission, `store: false`, and streamed completion verification. See OpenAI's [registration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), and [account session security](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions) documentation.

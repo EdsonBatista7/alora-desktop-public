@@ -1,0 +1,42 @@
+{
+  "name": "alora-desktop-agent",
+  "version": "0.1.1",
+  "private": false,
+  "type": "module",
+  "description": "Local, open-source desktop companion for Alora text generation using the signed-in user's ChatGPT plan.",
+  "author": "Sintonia Marketing",
+  "license": "MIT",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis --x64 && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify-signature.ps1",
+    "dist:win:unsigned": "electron-builder --win nsis --x64 --publish never --config.forceCodeSigning=false"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.sintoniaads.alora-desktop",
+    "productName": "Alora Desktop",
+    "electronLanguages": ["pt-BR", "en-US"],
+    "directories": { "output": "release-final" },
+    "forceCodeSigning": true,
+    "files": ["src/**", "LICENSE", "README.md", "package.json", "node_modules/jose/**", "node_modules/@panva/**"],
+    "win": { "icon": "assets/alora.ico", "target": [{ "target": "nsis", "arch": ["x64"] }], "artifactName": "Alora-Desktop-Setup-${version}-x64.${ext}" },
+    "nsis": {
+      "installerIcon": "assets/alora.ico",
+      "uninstallerIcon": "assets/alora.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Alora Desktop"
+    }
+  }
+}
