@@ -20,15 +20,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Build unsigned verification package
-        run: npm run dist:win:unsigned
+      - name: Build small unsigned web installer
+        run: npm run dist:win:web:unsigned
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Verify the unsigned package is not published by CI
+      - name: Verify the web installer and payload stay unsigned and complete
         shell: pwsh
         run: |
-          $installer = Get-ChildItem -LiteralPath release-final -Filter 'Alora-Desktop-Setup-*-x64.exe' -File
-          if (-not $installer) { throw 'Electron Builder did not produce the expected installer.' }
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer[0].FullName
+          $installer = Get-ChildItem -LiteralPath release-final -Filter 'Alora-Desktop-Setup-*-x64.exe' -File -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'Electron Builder did not produce the expected web installer.' }
+          if ($installer.Length -gt 10MB) { throw "The downloadable web installer is too large ($($installer.Length) bytes)." }
+          $payload = Get-ChildItem -LiteralPath release-final -Filter '*.nsis.7z' -File -Recurse | Select-Object -First 1
+          if (-not $payload -or $payload.Length -lt 1MB) { throw 'Electron Builder did not produce the application package.' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
           if ($signature.Status -ne 'NotSigned') { throw 'The verification package must remain unsigned.' }
-          Write-Host "Built $($installer[0].Name) ($($installer[0].Length) bytes). This CI job does not publish it."
+          Write-Host "Built $($installer.Name) ($($installer.Length) bytes) and $($payload.Name) ($($payload.Length) bytes). This CI job does not publish them."

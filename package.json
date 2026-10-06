@@ -1,6 +1,6 @@
 {
   "name": "alora-desktop-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "type": "module",
   "description": "Local, open-source desktop companion for Alora text generation using the signed-in user's ChatGPT plan.",
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "electron .",
     "dist:win": "electron-builder --win nsis --x64 && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/verify-signature.ps1",
-    "dist:win:unsigned": "electron-builder --win nsis --x64 --publish never --config.forceCodeSigning=false"
+    "dist:win:unsigned": "electron-builder --win nsis --x64 --publish never --config.forceCodeSigning=false",
+    "dist:win:web:unsigned": "electron-builder --win nsis-web --x64 --publish never --config.forceCodeSigning=false"
   },
   "dependencies": {
     "jose": "6.2.12"
@@ -30,6 +31,17 @@
     "nsis": {
       "installerIcon": "assets/alora.ico",
       "uninstallerIcon": "assets/alora.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Alora Desktop"
+    },
+    "nsisWeb": {
+      "appPackageUrl": "https://github.com/EdsonBatista7/alora-desktop-public/releases/download/v0.1.2/alora-desktop-agent-0.1.2-x64.nsis.7z",
+      "artifactName": "Alora-Desktop-Setup-${version}-x64.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowElevation": false,
