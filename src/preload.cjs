@@ -11,7 +11,8 @@ contextBridge.exposeInMainWorld('aloraDesktop', {
   pair: (code) => invoke('alora:pair', code),
   signIn: () => invoke('alora:signin'),
   signOut: () => invoke('alora:signout'),
-  model: (slug) => invoke('alora:model', slug),
+  fallback: (slug) => invoke('alora:fallback', slug),
+  effort: (effort) => invoke('alora:effort', effort),
   enable: (enabled) => invoke('alora:enable', enabled),
   onState: (callback) => {
     const listener = (_event, value) => callback(value);

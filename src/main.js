@@ -5,6 +5,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
+import { reasoningEfforts } from './model-capabilities.js';
 
 const APP_VERSION = app.getVersion();
 const ALORA_API = 'https://app.sintoniaads.com';
@@ -49,6 +50,9 @@ async function restore() {
     const record = JSON.parse(safeStorage.decryptString(Buffer.from(file.encrypted, 'base64')));
     if (typeof record.hostId === 'string') hostId = record.hostId;
     account = record.account ?? null;
+    // Upgrades preserve login and enrich the cached 0.1.4 catalog immediately, without waiting five minutes.
+    if (account && Array.isArray(account.models))
+      account.models = account.models.map((model) => ({ ...model, reasoningEfforts: reasoningEfforts(model.slug) }));
     encryptedState = { deviceId: record.deviceId ?? null, deviceToken: record.deviceToken ?? null };
   } catch { encryptedState = { deviceId: null, deviceToken: null }; }
   if (!encryptedState) encryptedState = { deviceId: null, deviceToken: null };
@@ -254,7 +258,7 @@ async function performSignIn() {
     }
     sendCallbackResult(callbackResponse, true, currentStatus.error
       ? 'A conta está conectada. Volte ao Alora Desktop; a lista de modelos será carregada novamente.'
-      : 'A autorização foi validada. Você já pode voltar ao Alora Desktop e escolher o modelo.');
+      : 'A autorização foi validada. Volte ao Alora Desktop para ativar. Cada funcionário usará seu próprio modelo e esforço.');
     callbackResponse = null;
     return currentStatus;
   } catch (error) {
@@ -297,7 +301,8 @@ async function listModels() {
   const body = await requestJson(`${OPENAI_RESOURCE}/models`, { headers: { Authorization: `Bearer ${token}` } });
   if (!Array.isArray(body.models)) throw new Error('O catálogo do ChatGPT veio em formato inesperado.');
   return body.models.filter((item) => item?.visibility === 'list' && typeof item.slug === 'string')
-    .map((item) => ({ slug: item.slug, displayName: String(item.display_name ?? item.slug).slice(0, 100) })).slice(0, 200);
+    .map((item) => ({ slug: item.slug, displayName: String(item.display_name ?? item.slug).slice(0, 100),
+      reasoningEfforts: reasoningEfforts(item.slug) })).slice(0, 200);
 }
 
 async function pair(code) {
@@ -381,7 +386,7 @@ async function doPoll() {
   polling = true;
   try {
     if (!encryptedState?.deviceToken) { setStatus({ paired: false, signedIn: !!account, enabled: false }); return; }
-    let models = account?.models ?? [];
+    let models = account?.refreshToken ? account.models ?? [] : [];
     let modelError = '';
     if (account?.refreshToken && !currentStatus.signingIn) {
       try {
@@ -391,17 +396,19 @@ async function doPoll() {
         models = account.models;
       } catch (error) {
         const needsSignin = error.code === 'oauth_reauth_required';
+        if (needsSignin) models = [];
         modelError = safeMessage(error);
         setStatus({ signedIn: !needsSignin, enabled: false, error: modelError });
       }
     }
     // O poll também é o sinal de vida: continua durante as tarefas, pedindo trabalho só se há vaga.
-    const slots = Math.max(0, MAX_PARALLEL_JOBS - activeJobs);
+    const slots = account?.refreshToken && !currentStatus.signingIn && !modelError ? Math.max(0, MAX_PARALLEL_JOBS - activeJobs) : 0;
     const state = await aloraRequest('/device/poll', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ models, appVersion: APP_VERSION, slots }) });
     setStatus({ paired: true, signedIn: !!account?.refreshToken, email: account?.email ?? '',
       displayName: account?.displayName ?? '', models: account?.models ?? models, enabled: state.enabled,
-      selectedModel: state.selectedModel, online: true, error: modelError });
+      fallbackModel: state.fallbackModel ?? state.selectedModel ?? null,
+      fallbackReasoningEffort: state.fallbackReasoningEffort ?? null, online: true, error: modelError });
     if (state.job) {
       activeJobs++;
       setStatus({ busy: true });
@@ -449,9 +456,8 @@ async function logout() {
 
 async function updateDevice(body) {
   if (!encryptedState?.deviceId) throw new Error('Pareie o computador com a Alora primeiro.');
-  const pathname = `/devices/${encodeURIComponent(encryptedState.deviceId)}`;
-  await aloraRequest(pathname, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  void doPoll(); return currentStatus;
+  await aloraRequest('/device/preferences', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  setStatus(body); schedulePoll(150); return currentStatus;
 }
 
 function createWindow() {
@@ -476,7 +482,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('alora:pair', async (_event, code) => { const result = await pair(code); void doPoll(); return result; });
   ipcMain.handle('alora:signin', () => signIn());
   ipcMain.handle('alora:signout', () => logout());
-  ipcMain.handle('alora:model', (_event, slug) => updateDevice({ selectedModel: slug }));
+  ipcMain.handle('alora:fallback', (_event, slug) => updateDevice({ fallbackModel: slug || null, fallbackReasoningEffort: null }));
+  ipcMain.handle('alora:effort', (_event, effort) => updateDevice({ fallbackReasoningEffort: effort || null }));
   ipcMain.handle('alora:enable', (_event, enabled) => updateDevice({ enabled: !!enabled }));
   void doPoll();
 });

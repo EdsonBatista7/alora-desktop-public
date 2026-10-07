@@ -7,7 +7,7 @@ Alora Desktop is a small, open-source Windows companion that runs text-generatio
 1. Install Alora Desktop and open it.
 2. In Alora, open **Profile → Local executor**, create a temporary pairing code, and paste it into the desktop app.
 3. Choose **Continue with ChatGPT**, review the OpenAI permission screen, and return to Alora Desktop.
-4. Choose an available model and enable the local executor.
+4. Enable the local executor. Each employee uses their configured model and reasoning effort. Optionally select a computer-wide fallback model and its reasoning effort; these apply only when the employee model cannot serve the task.
 
 The pairing code expires after ten minutes and works once. The desktop device token and all OAuth credentials are stored together using Electron `safeStorage` (Windows DPAPI). Signing out attempts to revoke the renewable session and clears its local copy. The callback page confirms success only after the app validates and saves the account. A temporary model-catalog failure preserves that authenticated account and the app retries automatically.
 
@@ -16,7 +16,8 @@ The pairing code expires after ten minutes and works once. The desktop device to
 - Text tasks, tool calls and inline image inputs (for example, a post written from an uploaded photo) are supported. Image generation continues through the existing Alora provider path.
 - Up to three tasks run in parallel. The app keeps polling while it works, so Alora knows it is online and only hands it a task when a slot is free.
 - A task reaches the computer only while the app is running, online, paired, and enabled. Otherwise Alora falls back to its configured provider.
-- A positively identified ChatGPT plan usage limit falls back to the configured provider. Interrupted or ambiguous requests are not replayed.
+- If an employee model is absent from the connected account catalog, Alora uses the configured local fallback model and its effort. A confirmed model-unavailable or plan-limit rejection can try that local fallback once. This path never dispatches an API-key inference; if the fallback is also unavailable, the task reports the failure. Interrupted or ambiguous requests are not replayed.
+- With no fallback selected, available employee models still work. A task needing an unavailable model reports that the local fallback must be configured. Unknown models expose only their default reasoning effort; known GPT families expose their documented choices.
 - The signed-in user's ChatGPT plan limits are shared with their other apps. The Alora connection is per user and per computer, not an organization-wide pool.
 
 ## Development
