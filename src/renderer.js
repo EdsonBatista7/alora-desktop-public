@@ -7,16 +7,18 @@ let state;
 function showMessage(text = '', kind = '') { message.textContent = text; message.className = `status ${kind}`; }
 function render(value) {
   state = value;
+  $('appVersion').textContent = value.appVersion ? `· v${value.appVersion}` : '';
   $('connection').textContent = value.error ? 'Atenção necessária' : value.online ? 'Computador conectado' : value.paired ? 'Aguardando conexão' : 'Não conectado';
   $('connection').className = `badge ${value.error ? 'off' : value.enabled ? 'on' : ''}`;
   pairCard.hidden = !!value.paired;
   $('accountName').textContent = value.displayName || (value.signedIn ? 'ChatGPT conectado' : 'Nenhuma conta conectada');
   $('accountEmail').textContent = value.email || (value.signedIn ? 'Conta protegida neste computador' : 'Sua conta continua neste computador');
-  signInButton.textContent = value.signedIn ? 'Atualizar conexão' : 'Continuar com ChatGPT';
-  signInButton.disabled = !value.paired;
+  signInButton.textContent = value.signingIn ? 'Conectando…' : value.signedIn ? 'Atualizar conexão' : 'Continuar com ChatGPT';
+  signInButton.disabled = !value.paired || !!value.signingIn;
+  $('signoutButton').disabled = !!value.signingIn;
   $('signoutButton').hidden = !value.signedIn;
   enableToggle.checked = !!value.enabled;
-  enableToggle.disabled = !value.paired || !value.signedIn || !value.selectedModel;
+  enableToggle.disabled = !value.paired || !value.signedIn || !value.selectedModel || !!value.signingIn;
   const options = value.models ?? [];
   const current = value.selectedModel ?? '';
   modelSelect.innerHTML = '';
@@ -25,8 +27,8 @@ function render(value) {
   modelSelect.append(placeholder);
   for (const item of options) { const option = document.createElement('option'); option.value = item.slug; option.textContent = item.displayName; modelSelect.append(option); }
   modelSelect.value = options.some((model) => model.slug === current) ? current : '';
-  modelSelect.disabled = !value.paired || !value.signedIn || !options.length;
-  const guidance = value.error || (value.busy ? 'Executando uma tarefa da Alora com sua conta ChatGPT…' : value.enabled
+  modelSelect.disabled = !value.paired || !value.signedIn || !options.length || !!value.signingIn;
+  const guidance = value.error || (value.signingIn ? 'Conclua a autorização no navegador. Estou validando sua conexão…' : value.busy ? 'Executando uma tarefa da Alora com sua conta ChatGPT…' : value.enabled
     ? 'Pronto. A Alora pode enviar tarefas de texto para este computador.'
     : value.paired && value.signedIn ? 'Escolha um modelo e ative para começar.'
     : value.paired ? 'Computador pareado. Conecte sua conta ChatGPT para continuar.'
@@ -38,9 +40,9 @@ function render(value) {
 
 async function action(button, run, success) {
   button.disabled = true; showMessage('Aguarde…');
-  try { const result = await run(); render(result ?? await api.state()); if (success) showMessage(success, 'ok'); }
+  try { const result = await run(); render(result ?? await api.state()); if (success && !state?.error) showMessage(success, 'ok'); }
   catch (error) { showMessage(error?.message ?? 'Não foi possível concluir a ação.', 'error'); }
-  finally { button.disabled = false; if (button === signInButton && !state?.paired) button.disabled = true; }
+  finally { button.disabled = false; if (state) render(state); }
 }
 
 pairButton.addEventListener('click', () => action(pairButton, () => api.pair($('pairCode').value), 'Computador pareado. Agora conecte o ChatGPT.'));

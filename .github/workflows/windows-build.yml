@@ -20,6 +20,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify OAuth login and recovery
+        run: npm test
       - name: Build small unsigned web installer
         run: npm run dist:win:web:unsigned
         env:
