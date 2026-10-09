@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { reasoningEfforts } from './model-capabilities.js';
+import { executarTarefaResponses } from './responses-executor.js';
 
 const APP_VERSION = app.getVersion();
 const ALORA_API = 'https://app.sintoniaads.com';
@@ -13,7 +14,6 @@ const OPENAI_AUTH = 'https://auth.openai.com';
 const OPENAI_RESOURCE = 'https://api.openai.com/v1';
 const CALLBACK_PATH = '/auth/callback';
 const SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
-const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 let mainWindow;
 let encryptedState = null;
 let account = null;
@@ -322,63 +322,7 @@ async function postJobResult(job, value) {
 }
 
 async function runInference(job) {
-  try {
-    const token = await accessToken();
-    const payload = { ...(job.body ?? {}), store: false, stream: true };
-    delete payload.previous_response_id;
-    delete payload.background;
-    const response = await secureFetch(`${OPENAI_RESOURCE}/responses`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(payload), signal: AbortSignal.timeout(110_000),
-    }, 'o ChatGPT');
-    if (!response.ok) {
-      let error = {};
-      try { error = await response.json(); } catch { /* safe fallback */ }
-      const code = String(error.error?.code ?? error.error?.type ?? `http_${response.status}`).slice(0, 120);
-      await postJobResult(job, { error: { code } }); return;
-    }
-    if (!response.body) throw new Error('stream_missing');
-    const reader = response.body.getReader(), decoder = new TextDecoder();
-    let buffer = '', bytes = 0, completed = null, failure = null;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) throw new Error('response_too_large');
-      buffer += decoder.decode(value, { stream: true });
-      let end;
-      while (true) {
-        const lfEnd = buffer.indexOf('\n\n');
-        const crlfEnd = buffer.indexOf('\r\n\r\n');
-        if (lfEnd < 0 && crlfEnd < 0) break;
-        const useCrLf = crlfEnd >= 0 && (lfEnd < 0 || crlfEnd <= lfEnd);
-        end = useCrLf ? crlfEnd : lfEnd;
-        const frame = buffer.slice(0, end).replace(/\r$/gm, '');
-        buffer = buffer.slice(end + (useCrLf ? 4 : 2));
-        let eventName = '', data = '';
-        for (const line of frame.split(/\r?\n/)) {
-          if (line.startsWith('event:')) eventName = line.slice(6).trim();
-          else if (line.startsWith('data:')) data += `${line.slice(5).trim()}\n`;
-        }
-        if (!data.trim()) continue;
-        let event; try { event = JSON.parse(data); } catch { continue; }
-        const type = String(event.type ?? eventName);
-        if (type === 'response.failed') failure = event.response?.error ?? event.error ?? { code: 'response_failed' };
-        if (type === 'response.incomplete') failure = { code: 'response_incomplete' };
-        if (type === 'response.completed') completed = event.response ?? event;
-      }
-    }
-    if (failure) {
-      await postJobResult(job, { error: { code: String(failure.code ?? failure.type ?? 'response_failed').slice(0, 120) } }); return;
-    }
-    if (!completed || completed.status !== 'completed') {
-      await postJobResult(job, { error: { code: 'stream_ended_before_completion' } }); return;
-    }
-    await postJobResult(job, { response: completed });
-  } catch (error) {
-    const code = String(error?.code ?? (error?.name === 'TimeoutError' ? 'request_timeout' : 'local_executor_error')).slice(0, 120);
-    try { await postJobResult(job, { error: { code } }); } catch { /* Alora expires an unacknowledged job; never replay it. */ }
-  }
+  return executarTarefaResponses(job, { accessToken, secureFetch, postJobResult });
 }
 
 async function doPoll() {

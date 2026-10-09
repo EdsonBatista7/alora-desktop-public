@@ -1,8 +1,7 @@
-import { effortLabels } from './model-capabilities.js';
 const api = window.aloraDesktop;
 const $ = (id) => document.getElementById(id);
 const pairCard = $('pairCard'), pairButton = $('pairButton'), signInButton = $('signinButton');
-const modelSelect = $('modelSelect'), effortSelect = $('effortSelect'), enableToggle = $('enableToggle'), message = $('message');
+const enableToggle = $('enableToggle'), message = $('message');
 let state;
 
 function showMessage(text = '', kind = '') { message.textContent = text; message.className = `status ${kind}`; }
@@ -20,26 +19,9 @@ function render(value) {
   $('signoutButton').hidden = !value.signedIn;
   enableToggle.checked = !!value.enabled;
   enableToggle.disabled = !value.paired || !value.signedIn || !value.models?.length || !!value.signingIn;
-  const options = value.models ?? [];
-  const current = value.fallbackModel ?? '';
-  modelSelect.innerHTML = '';
-  const placeholder = document.createElement('option'); placeholder.value = '';
-  placeholder.textContent = options.length ? 'Sem fallback local' : 'Conecte o ChatGPT para carregar os modelos';
-  modelSelect.append(placeholder);
-  for (const item of options) { const option = document.createElement('option'); option.value = item.slug; option.textContent = item.displayName; modelSelect.append(option); }
-  modelSelect.value = options.some((model) => model.slug === current) ? current : '';
-  modelSelect.disabled = !value.paired || !value.signedIn || !options.length || !!value.signingIn;
-  const efforts = options.find((model) => model.slug === current)?.reasoningEfforts ?? [];
-  effortSelect.replaceChildren();
-  const automatic = document.createElement('option'); automatic.value = ''; automatic.textContent = 'Padrão do modelo'; effortSelect.append(automatic);
-  for (const effort of efforts) {
-    const option = document.createElement('option'); option.value = effort; option.textContent = effortLabels[effort] ?? effort; effortSelect.append(option);
-  }
-  effortSelect.value = value.fallbackReasoningEffort ?? '';
-  effortSelect.disabled = !value.paired || !value.signedIn || !current || !efforts.length || !!value.signingIn;
   const guidance = value.error || (value.signingIn ? 'Conclua a autorização no navegador. Estou validando sua conexão…' : value.busy ? 'Executando uma tarefa da Alora com sua conta ChatGPT…' : value.enabled
-    ? 'Pronto. Cada funcionário usa seu modelo e esforço; o fallback local atende quando necessário.'
-    : value.paired && value.signedIn ? 'Ative para começar. Você pode definir um modelo e esforço de fallback local.'
+    ? 'Pronto. O computador executa o modelo e o esforço configurados para cada funcionário.'
+    : value.paired && value.signedIn ? 'Ative para executar neste computador as tarefas compatíveis com sua conta.'
     : value.paired ? 'Computador pareado. Conecte sua conta ChatGPT para continuar.'
     : 'Credenciais protegidas localmente pelo Windows.');
   $('statusText').textContent = guidance;
@@ -59,20 +41,6 @@ signInButton.addEventListener('click', () => action(signInButton, () => api.sign
 $('signoutButton').addEventListener('click', async () => {
   if (!window.confirm('Desconectar esta conta ChatGPT deste computador?')) return;
   await action($('signoutButton'), () => api.signOut(), 'A conta foi desconectada deste computador.');
-});
-modelSelect.addEventListener('change', async () => {
-  const slug = modelSelect.value;
-  modelSelect.disabled = true; effortSelect.disabled = true; showMessage('Salvando fallback…');
-  try { render(await api.fallback(slug)); showMessage('Fallback local atualizado.', 'ok'); }
-  catch (error) { showMessage(error?.message ?? 'Não foi possível salvar o modelo.', 'error'); }
-  finally { if (state) render(state); }
-});
-effortSelect.addEventListener('change', async () => {
-  const effort = effortSelect.value;
-  effortSelect.disabled = true; showMessage('Salvando esforço do fallback…');
-  try { render(await api.effort(effort)); showMessage('Esforço do fallback atualizado.', 'ok'); }
-  catch (error) { showMessage(error?.message ?? 'Não foi possível salvar o esforço.', 'error'); }
-  finally { if (state) render(state); }
 });
 enableToggle.addEventListener('change', async () => {
   const enabled = enableToggle.checked; enableToggle.disabled = true;

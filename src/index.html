@@ -16,15 +16,10 @@
     <section class="card" id="accountCard">
       <div class="step"><span>2</span><div><h2>Conectar seu ChatGPT</h2><p>Uma janela segura do navegador solicitará autorização. A Alora nunca vê sua senha nem seus tokens.</p></div></div>
       <div class="account"><div class="identity"><div class="avatar">C</div><div><b id="accountName">Nenhuma conta conectada</b><small id="accountEmail">Sua conta continua neste computador</small></div></div><button id="signinButton" class="outline">Continuar com ChatGPT</button></div>
-      <div class="fine">Uso do plano ChatGPT está sujeito aos limites da sua assinatura. Se o modelo do funcionário não puder atender, a Alora tenta o fallback local configurado abaixo.</div>
+      <div class="fine">O uso do plano ChatGPT está sujeito aos limites da sua assinatura. Cada tarefa usa o modelo configurado para o funcionário no Admin da Alora.</div>
     </section>
     <section class="card" id="preferencesCard">
-      <div class="step"><span>3</span><div><h2>Ativar e definir o fallback local</h2><p>Cada funcionário usa o modelo e o esforço definidos na Alora. O fallback abaixo entra somente se esse modelo estiver indisponível ou atingir o limite.</p></div></div>
-      <div class="fallback-fields">
-        <label class="field">Modelo de fallback<select id="modelSelect"><option value="">Sem fallback local</option></select></label>
-        <label class="field">Esforço do fallback<select id="effortSelect"><option value="">Padrão do modelo</option></select></label>
-      </div>
-      <div class="fine">O fallback usa sua sessão do ChatGPT neste computador. Se ele também não puder atender, a tarefa informa a falha sem trocar para a API.</div>
+      <div class="step"><span>3</span><div><h2>Ativar executor local</h2><p>O computador executa somente o modelo e o esforço configurados para o funcionário no Admin. Se esse modelo não estiver disponível na sua conta, a Central da Alora escolhe o próximo caminho configurado.</p></div></div>
       <div class="toggle-row"><div><b id="enableLabel">Permitir tarefas da Alora neste computador</b><small>A Alora usa sua sessão para tarefas de texto da marca que você está operando.</small></div><label class="switch"><input type="checkbox" id="enableToggle" aria-labelledby="enableLabel"><span></span></label></div>
     </section>
     <section class="status" id="message" role="status" aria-live="polite"></section>
