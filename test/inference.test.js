@@ -48,6 +48,19 @@ function fixture(stream, opts = {}) {
   };
 }
 
+function fetchAteAbortar(_url, init) {
+  return new Promise((_resolve, reject) => {
+    // Uma conexão real mantém o event loop vivo; AbortSignal.timeout sozinho não mantém.
+    const connection = setTimeout(() => reject(new Error('deadline did not abort')), 1000);
+    const abort = () => {
+      clearTimeout(connection);
+      reject(new Error('fetch aborted'));
+    };
+    if (init.signal.aborted) abort();
+    else init.signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
 test('executor não publica texto vazio quando completion omite texto já emitido em delta', async () => {
   const full = event('response.output_text.delta', { delta: 'A resposta está pronta.' })
     + event('response.completed', { response: resposta('', { output: [] }) });
@@ -191,10 +204,7 @@ test('stream sem response.completed é reportado como interrompido, nunca como s
 });
 
 test('deadline aborta a requisição e reporta timeout sem repetir a tarefa', async () => {
-  const f = fixture((_url, init) => new Promise((_resolve, reject) => {
-    // `secureFetch` traduz o TimeoutError em Error comum; o sinal continua sendo a fonte confiável.
-    init.signal.addEventListener('abort', () => reject(new Error('fetch aborted')), { once: true });
-  }), { timeoutMs: 10 });
+  const f = fixture(fetchAteAbortar, { timeoutMs: 10 });
   await f.run();
   assert.equal(f.requests.length, 1);
   assert.deepEqual(f.reports, [{ error: { code: 'request_timeout' } }]);
@@ -209,9 +219,7 @@ test('deadlineAt expirado não inicia uma inferência', async () => {
 });
 
 test('deadlineAt limita o signal da inferência e encerra antes de expirar o job', async () => {
-  const f = fixture((_url, init) => new Promise((_resolve, reject) => {
-    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
-  }), { timeoutMs: 1000 });
+  const f = fixture(fetchAteAbortar, { timeoutMs: 1000 });
   f.job.deadlineAt = new Date(Date.now() + 40).toISOString();
   await f.run();
   assert.equal(f.requests.length, 1);
