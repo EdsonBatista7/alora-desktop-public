@@ -11,6 +11,12 @@ Alora Desktop is a small, open-source Windows companion that runs text-generatio
 
 The pairing code expires after ten minutes and works once. The desktop device token and all OAuth credentials are stored together using Electron `safeStorage` (Windows DPAPI). Signing out attempts to revoke the renewable session and clears its local copy. The callback page confirms success only after the app validates and saves the account. A temporary model-catalog failure preserves that authenticated account and the app retries automatically.
 
+## Prospecting email queue (0.1.7)
+
+Some new Microsoft 365 tenants reject mail submitted from cloud servers (`550 5.7.708 … traffic not accepted from this IP`) while accepting the same account's mail sent from the user's own connection. When a brand's daily routine is set to **"You, through Alora Desktop"**, Alora prepares each prospecting email and keeps it in a queue instead of sending it. The paired app lists that queue; the user selects messages, sets a maximum and an interval, and sends them.
+
+For each message the app asks Alora to prepare it: Alora re-checks suppression and lead stage, reserves the daily quota, builds the final text (signature and unsubscribe footer) and hands over a short-lived OAuth token limited to `SMTP.Send` for the connected mailbox. The app delivers it from this computer through `smtp.office365.com:587` (STARTTLS + `AUTH XOAUTH2`) and reports the result, so Alora records history, cadence and lead stage exactly as in automatic sending. One message at a time, with the chosen interval; a Microsoft rejection of the sender (5.7.x) stops the batch. A connection lost after the message body is reported as uncertain and is never resent automatically. The token is used only in memory for that message and is not stored.
+
 ## Boundaries
 
 - Text tasks, tool calls and inline image inputs (for example, a post written from an uploaded photo) are supported. Image generation continues through the existing Alora provider path.

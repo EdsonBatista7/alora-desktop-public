@@ -22,9 +22,23 @@
       <div class="step"><span>3</span><div><h2>Ativar executor local</h2><p>O computador executa somente o modelo e o esforço configurados para o funcionário no Admin. Se esse modelo não estiver disponível na sua conta, a Central da Alora escolhe o próximo caminho configurado.</p></div></div>
       <div class="toggle-row"><div><b id="enableLabel">Permitir tarefas da Alora neste computador</b><small>A Alora usa sua sessão para tarefas de texto da marca que você está operando.</small></div><label class="switch"><input type="checkbox" id="enableToggle" aria-labelledby="enableLabel"><span></span></label></div>
     </section>
+    <section class="card" id="emailCard" hidden>
+      <div class="step"><span>✉</span><div><h2>Fila de e-mails da prospecção</h2><p>Quando a <b>Rotina diária</b> da Alora está em <b>"Você, pelo Alora Desktop"</b>, as abordagens prontas aparecem aqui. Marque, escolha quantas e o intervalo, e envie: os e-mails saem deste computador, pela sua conta do Outlook.</p></div></div>
+      <div class="fila-barra">
+        <button id="filaAtualizar" class="outline">Atualizar fila</button>
+        <label class="mini">Enviar no máximo <input id="filaMax" type="number" min="1" max="500" value="20"></label>
+        <label class="mini">Intervalo <input id="filaIntervalo" type="number" min="5" max="600" value="30"> s</label>
+        <button id="filaEnviar" class="primary">Enviar selecionados</button>
+        <button id="filaParar" class="outline" hidden>Parar</button>
+      </div>
+      <div class="fila-info" id="filaInfo">Clique em Atualizar fila.</div>
+      <div class="fila-cabecalho" id="filaCabecalho" hidden><label><input type="checkbox" id="filaTodos"> Selecionar todos</label><span id="filaContagem"></span></div>
+      <div class="fila-lista" id="filaLista"></div>
+    </section>
     <section class="status" id="message" role="status" aria-live="polite"></section>
     <footer><span id="statusText">As credenciais são criptografadas no armazenamento protegido do Windows.</span><button id="signoutButton" class="link" hidden>Desconectar ChatGPT</button></footer>
   </main>
   <script type="module" src="./renderer.js"></script>
+  <script type="module" src="./fila-emails.js"></script>
 </body>
 </html>

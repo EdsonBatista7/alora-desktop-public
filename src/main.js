@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { reasoningEfforts } from './model-capabilities.js';
 import { executarTarefaResponses } from './responses-executor.js';
+import { enviarSmtp } from './smtp.js';
 
 const APP_VERSION = app.getVersion();
 const ALORA_API = 'https://app.sintoniaads.com';
@@ -404,9 +405,83 @@ async function updateDevice(body) {
   setStatus(body); schedulePoll(150); return currentStatus;
 }
 
+// ===== Fila de e-mails da prospecção (modo "Alora Desktop" da Rotina diária) =====
+// A Alora prepara cada e-mail (cota, texto final, token de SMTP de curta duração); este computador
+// só entrega pela internet da pessoa e devolve o resultado. Um por vez, com intervalo, e pode parar.
+let envioEmails = { ativo: false, parar: false };
+const avisarEnvio = (evento) => mainWindow?.webContents.send('alora:envio', evento);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function filaEmails() {
+  const r = await aloraRequest('/prospeccao/fila');
+  return Array.isArray(r.itens) ? r.itens : [];
+}
+
+async function esperar(ms) {
+  const fim = Date.now() + ms;
+  while (Date.now() < fim && !envioEmails.parar) await new Promise((ok) => setTimeout(ok, Math.min(500, fim - Date.now())));
+}
+
+async function concluirComRetentativa(corpo) {
+  let ultimo;
+  for (const espera of [0, 2000, 5000, 15000]) {
+    if (espera) await new Promise((ok) => setTimeout(ok, espera));
+    try { return await aloraRequest('/prospeccao/concluir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }); }
+    catch (error) { ultimo = error; }
+  }
+  throw ultimo;
+}
+
+async function enviarEmails(ids, intervaloSegundos) {
+  if (envioEmails.ativo) throw new Error('Já existe um envio em andamento.');
+  const lista = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && UUID.test(id)).slice(0, 500);
+  if (!lista.length) throw new Error('Selecione ao menos um e-mail.');
+  const intervalo = Math.max(5, Math.min(600, Math.trunc(Number(intervaloSegundos) || 30)));
+  envioEmails = { ativo: true, parar: false };
+  const resultado = { enviados: 0, falhas: 0, interrompido: false };
+  avisarEnvio({ tipo: 'inicio', total: lista.length });
+  try {
+    for (let i = 0; i < lista.length; i++) {
+      if (envioEmails.parar) { resultado.interrompido = true; break; }
+      const id = lista[i];
+      avisarEnvio({ tipo: 'item', id, status: 'enviando' });
+      let preparado;
+      try {
+        preparado = await aloraRequest('/prospeccao/preparar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      } catch (error) {
+        resultado.falhas++; avisarEnvio({ tipo: 'item', id, status: 'erro', erro: safeMessage(error) });
+        if (/limite de hoje/i.test(String(error?.message))) { resultado.interrompido = true; break; }
+        continue;
+      }
+      let envio;
+      try {
+        const { messageId } = await enviarSmtp(preparado.smtp, { para: preparado.para, assunto: preparado.assunto, corpo: preparado.corpo });
+        envio = { ok: true, messageId };
+      } catch (error) { envio = { ok: false, erro: safeMessage(error), incerto: !!error?.incerto }; }
+      try { await concluirComRetentativa({ id, ticket: preparado.ticket, ...envio }); }
+      catch (error) {
+        avisarEnvio({ tipo: 'item', id, status: envio.ok ? 'sem_registro' : 'erro', erro: envio.ok ? 'Enviado, mas a Alora não confirmou o registro. Confira antes de reenviar.' : envio.erro });
+        if (envio.ok) resultado.enviados++; else resultado.falhas++;
+        continue;
+      }
+      if (envio.ok) { resultado.enviados++; avisarEnvio({ tipo: 'item', id, status: 'enviado' }); }
+      else {
+        resultado.falhas++; avisarEnvio({ tipo: 'item', id, status: 'erro', erro: envio.erro });
+        // Recusa do provedor ao remetente (5.7.x): para o lote para não piorar a reputação da conta.
+        if (/\b5\.7\.\d/.test(envio.erro)) { resultado.interrompido = true; avisarEnvio({ tipo: 'aviso', mensagem: 'A Microsoft recusou o envio pela conta. Parei o lote; a Alora pausou o e-mail da marca.' }); break; }
+      }
+      if (i < lista.length - 1) await esperar(intervalo * 1000);
+    }
+  } finally {
+    envioEmails = { ativo: false, parar: false };
+    avisarEnvio({ tipo: 'fim', ...resultado });
+  }
+  return resultado;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 760, height: 720, minWidth: 620, minHeight: 600,
+    width: 860, height: 820, minWidth: 640, minHeight: 600,
     title: 'Alora Desktop', backgroundColor: '#f7f8fc',
     webPreferences: { preload: path.join(app.getAppPath(), 'src/preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: false },
   });
@@ -429,6 +504,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('alora:fallback', (_event, slug) => updateDevice({ fallbackModel: slug || null, fallbackReasoningEffort: null }));
   ipcMain.handle('alora:effort', (_event, effort) => updateDevice({ fallbackReasoningEffort: effort || null }));
   ipcMain.handle('alora:enable', (_event, enabled) => updateDevice({ enabled: !!enabled }));
+  ipcMain.handle('alora:fila', () => filaEmails());
+  ipcMain.handle('alora:enviar', (_event, ids, intervalo) => enviarEmails(ids, intervalo));
+  ipcMain.handle('alora:parar', () => { if (envioEmails.ativo) envioEmails.parar = true; return true; });
   void doPoll();
 });
 

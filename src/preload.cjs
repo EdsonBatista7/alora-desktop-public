@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('aloraDesktop', {
   fallback: (slug) => invoke('alora:fallback', slug),
   effort: (effort) => invoke('alora:effort', effort),
   enable: (enabled) => invoke('alora:enable', enabled),
+  fila: () => invoke('alora:fila'),
+  enviar: (ids, intervalo) => invoke('alora:enviar', ids, intervalo),
+  parar: () => invoke('alora:parar'),
+  onEnvio: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('alora:envio', listener);
+    return () => ipcRenderer.removeListener('alora:envio', listener);
+  },
   onState: (callback) => {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('alora:state-changed', listener);
