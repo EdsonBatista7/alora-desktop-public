@@ -44,6 +44,9 @@ function desenharFila() {
   atualizarContagem();
 }
 
+// Depois de um lote (manual ou automático), a lista reflete o que saiu.
+function carregarFilaDepois() { return new Promise((ok) => setTimeout(() => { void carregarFila().finally(ok); }, 1500)); }
+
 async function carregarFila() {
   if (enviando) return;
   $('filaAtualizar').disabled = true; filaInfo.textContent = 'Buscando a fila na Alora…';
@@ -74,11 +77,29 @@ api.onEnvio((evento) => {
   if (evento.tipo === 'item') statusItem.set(evento.id, { status: evento.status, erro: evento.erro });
   if (evento.tipo === 'aviso') aviso(evento.mensagem, 'error');
   if (evento.tipo === 'fim') {
+    void carregarFilaDepois();
     enviando = false; $('filaEnviar').disabled = false; $('filaParar').hidden = true;
     aviso(`${evento.enviados} enviado(s)${evento.falhas ? `, ${evento.falhas} não enviado(s)` : ''}${evento.interrompido ? ' — lote interrompido' : ''}.`, evento.falhas ? 'error' : 'ok');
   }
   desenharFila();
 });
+
+// Envio automático: liga/desliga e intervalo; o processo principal faz o resto (a cada 5 minutos).
+function mostrarAutomatico(a) {
+  if (!a) return;
+  $('autoToggle').checked = a.ativo === true;
+  $('autoIntervalo').value = String(a.intervaloSegundos ?? 90);
+  const proximo = a.proximo ? new Date(a.proximo).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+  $('autoStatus').textContent = a.ativo ? `${a.motivo || 'Ligado.'}${proximo ? ` Próxima conferência às ${proximo}.` : ''}` : 'Desligado: envie pela lista abaixo.';
+}
+async function salvarAutomatico(patch) {
+  try { mostrarAutomatico(await api.salvarAutomatico(patch)); }
+  catch (error) { aviso(error?.message ?? 'Não consegui salvar o envio automático.', 'error'); }
+}
+$('autoToggle').addEventListener('change', (e) => { void salvarAutomatico({ ativo: e.target.checked }); });
+$('autoIntervalo').addEventListener('change', (e) => { void salvarAutomatico({ intervaloSegundos: Number(e.target.value) }); });
+api.onAutomatico(mostrarAutomatico);
+api.automatico().then(mostrarAutomatico).catch(() => {});
 
 // A fila aparece quando o computador está pareado com a Alora (não depende do ChatGPT).
 function aoEstado(value) {

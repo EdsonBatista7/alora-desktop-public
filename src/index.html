@@ -24,6 +24,8 @@
     </section>
     <section class="card" id="emailCard" hidden>
       <div class="step"><span>✉</span><div><h2>Fila de e-mails da prospecção</h2><p>Quando a <b>Rotina diária</b> da Alora está em <b>"Você, pelo Alora Desktop"</b>, as abordagens prontas aparecem aqui. Marque, escolha quantas e o intervalo, e envie: os e-mails saem deste computador, pela sua conta do Outlook.</p></div></div>
+      <div class="toggle-row"><div><b id="autoLabel">Enviar automaticamente</b><small id="autoInfo">Com o programa aberto (pode minimizar), envio sozinho a fila do dia, de segunda a sexta, das 8h às 18h, respeitando o limite e o aquecimento definidos na Alora.</small></div><label class="switch"><input type="checkbox" id="autoToggle" aria-labelledby="autoLabel"><span></span></label></div>
+      <div class="fila-barra"><label class="mini">Intervalo entre e-mails <input id="autoIntervalo" type="number" min="30" max="900" value="90"> s</label><span class="fila-info" id="autoStatus"></span></div>
       <div class="fila-barra">
         <button id="filaAtualizar" class="outline">Atualizar fila</button>
         <label class="mini">Enviar no máximo <input id="filaMax" type="number" min="1" max="500" value="20"></label>

@@ -8,6 +8,7 @@ import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { reasoningEfforts } from './model-capabilities.js';
 import { executarTarefaResponses } from './responses-executor.js';
 import { enviarSmtp } from './smtp.js';
+import { CICLO_MS, estadoDepoisDoLote, idsParaEnviar, normalizarPreferencias, podeEnviarAgora } from './envio-automatico.js';
 
 const APP_VERSION = app.getVersion();
 const ALORA_API = 'https://app.sintoniaads.com';
@@ -438,7 +439,7 @@ async function enviarEmails(ids, intervaloSegundos) {
   if (!lista.length) throw new Error('Selecione ao menos um e-mail.');
   const intervalo = Math.max(5, Math.min(600, Math.trunc(Number(intervaloSegundos) || 30)));
   envioEmails = { ativo: true, parar: false };
-  const resultado = { enviados: 0, falhas: 0, interrompido: false };
+  const resultado = { enviados: 0, falhas: 0, interrompido: false, limite: false, bloqueado: false };
   avisarEnvio({ tipo: 'inicio', total: lista.length });
   try {
     for (let i = 0; i < lista.length; i++) {
@@ -450,7 +451,7 @@ async function enviarEmails(ids, intervaloSegundos) {
         preparado = await aloraRequest('/prospeccao/preparar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
       } catch (error) {
         resultado.falhas++; avisarEnvio({ tipo: 'item', id, status: 'erro', erro: safeMessage(error) });
-        if (/limite de hoje/i.test(String(error?.message))) { resultado.interrompido = true; break; }
+        if (/limite de hoje/i.test(String(error?.message))) { resultado.interrompido = true; resultado.limite = true; break; }
         continue;
       }
       let envio;
@@ -468,7 +469,7 @@ async function enviarEmails(ids, intervaloSegundos) {
       else {
         resultado.falhas++; avisarEnvio({ tipo: 'item', id, status: 'erro', erro: envio.erro });
         // Recusa do provedor ao remetente (5.7.x): para o lote para não piorar a reputação da conta.
-        if (/\b5\.7\.\d/.test(envio.erro)) { resultado.interrompido = true; avisarEnvio({ tipo: 'aviso', mensagem: 'A Microsoft recusou o envio pela conta. Parei o lote; a Alora pausou o e-mail da marca.' }); break; }
+        if (/\b5\.7\.\d/.test(envio.erro)) { resultado.interrompido = true; resultado.bloqueado = true; avisarEnvio({ tipo: 'aviso', mensagem: 'A Microsoft recusou o envio pela conta. Parei o lote; a Alora pausou o e-mail da marca.' }); break; }
       }
       if (i < lista.length - 1) await esperar(intervalo * 1000);
     }
@@ -477,6 +478,59 @@ async function enviarEmails(ids, intervaloSegundos) {
     avisarEnvio({ tipo: 'fim', ...resultado });
   }
   return resultado;
+}
+
+// ===== Envio automático =====
+// Ligado, o computador busca a fila a cada 5 minutos e envia sozinho, em horário comercial, com
+// intervalo entre os e-mails. Cota e aquecimento continuam sendo da Alora (cada e-mail é reservado).
+const prefsPath = () => path.join(app.getPath('userData'), 'alora-envio-automatico.json');
+let prefsEnvio = normalizarPreferencias({});
+let estadoAuto = {};
+let autoTimer = null;
+let autoStatus = { proximo: null, motivo: '' };
+const avisarAuto = () => mainWindow?.webContents.send('alora:automatico', { ...prefsEnvio, ...autoStatus });
+
+async function carregarPrefsEnvio() {
+  try { prefsEnvio = normalizarPreferencias(JSON.parse(await readFile(prefsPath(), 'utf8'))); } catch { prefsEnvio = normalizarPreferencias({}); }
+}
+
+async function salvarPrefsEnvio(patch) {
+  prefsEnvio = normalizarPreferencias({ ...prefsEnvio, ...(patch && typeof patch === 'object' ? patch : {}) });
+  const tmp = `${prefsPath()}.tmp`;
+  await writeFile(tmp, JSON.stringify(prefsEnvio), 'utf8'); await rename(tmp, prefsPath());
+  // Automático só funciona com o programa aberto: abre junto com o Windows (minimizado).
+  try { app.setLoginItemSettings({ openAtLogin: prefsEnvio.ativo, args: ['--minimizado'] }); } catch { /* sem permissão: segue */ }
+  agendarAuto(prefsEnvio.ativo ? 3000 : null);
+  return { ...prefsEnvio, ...autoStatus };
+}
+
+function agendarAuto(ms) {
+  if (autoTimer) clearTimeout(autoTimer);
+  autoTimer = null;
+  if (!prefsEnvio.ativo || ms == null) { autoStatus = { proximo: null, motivo: prefsEnvio.ativo ? '' : 'Envio automático desligado.' }; avisarAuto(); return; }
+  autoStatus = { ...autoStatus, proximo: new Date(Date.now() + ms).toISOString() };
+  autoTimer = setTimeout(() => { void cicloAuto(); }, ms);
+  avisarAuto();
+}
+
+async function cicloAuto() {
+  try {
+    if (!encryptedState?.deviceToken) { autoStatus = { ...autoStatus, motivo: 'Pareie o computador com a Alora.' }; return; }
+    if (envioEmails.ativo) return;
+    const agora = new Date();
+    const pode = podeEnviarAgora(agora, prefsEnvio, estadoAuto);
+    if (!pode.pode) { autoStatus = { ...autoStatus, motivo: pode.motivo }; return; }
+    const ids = idsParaEnviar(await filaEmails());
+    if (!ids.length) { autoStatus = { ...autoStatus, motivo: 'Fila vazia. Confiro de novo em 5 minutos.' }; return; }
+    autoStatus = { ...autoStatus, motivo: `Enviando ${ids.length} e-mail(s) da fila…` }; avisarAuto();
+    const resultado = await enviarEmails(ids, prefsEnvio.intervaloSegundos);
+    estadoAuto = estadoDepoisDoLote(new Date(), estadoAuto, resultado);
+    autoStatus = { ...autoStatus, motivo: `Último lote: ${resultado.enviados} enviado(s)${resultado.falhas ? `, ${resultado.falhas} não enviado(s)` : ''}.` };
+  } catch (error) {
+    autoStatus = { ...autoStatus, motivo: `Não consegui buscar a fila agora (${safeMessage(error)}). Tento de novo em 5 minutos.` };
+  } finally {
+    agendarAuto(CICLO_MS);
+  }
 }
 
 function createWindow() {
@@ -490,6 +544,7 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   void mainWindow.loadFile(path.join(app.getAppPath(), 'src/index.html'));
   mainWindow.on('closed', () => { mainWindow = null; });
+  if (process.argv.includes('--minimizado')) mainWindow.minimize();
 }
 
 app.whenReady().then(async () => {
@@ -507,6 +562,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('alora:fila', () => filaEmails());
   ipcMain.handle('alora:enviar', (_event, ids, intervalo) => enviarEmails(ids, intervalo));
   ipcMain.handle('alora:parar', () => { if (envioEmails.ativo) envioEmails.parar = true; return true; });
+  ipcMain.handle('alora:automatico', () => ({ ...prefsEnvio, ...autoStatus }));
+  ipcMain.handle('alora:automatico-salvar', (_event, patch) => salvarPrefsEnvio(patch));
+  await carregarPrefsEnvio();
+  agendarAuto(prefsEnvio.ativo ? 20_000 : null);
   void doPoll();
 });
 

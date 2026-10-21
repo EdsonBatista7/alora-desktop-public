@@ -17,6 +17,10 @@ Some new Microsoft 365 tenants reject mail submitted from cloud servers (`550 5.
 
 For each message the app asks Alora to prepare it: Alora re-checks suppression and lead stage, reserves the daily quota, builds the final text (signature and unsubscribe footer) and hands over a short-lived OAuth token limited to `SMTP.Send` for the connected mailbox. The app delivers it from this computer through `smtp.office365.com:587` (STARTTLS + `AUTH XOAUTH2`) and reports the result, so Alora records history, cadence and lead stage exactly as in automatic sending. One message at a time, with the chosen interval; a Microsoft rejection of the sender (5.7.x) stops the batch. A connection lost after the message body is reported as uncertain and is never resent automatically. The token is used only in memory for that message and is not stored.
 
+## Automatic sending (0.1.8)
+
+With **Send automatically** on, the app checks the queue every five minutes while it is running (it can stay minimized, and it opens with Windows, minimized) and sends what is waiting, one message at a time with the chosen interval (90 s by default), Monday to Friday from 8 am to 6 pm. Alora still reserves the daily quota and the mailbox warm-up for every message; when it answers that today's limit is reached, the app rests until the next day. A Microsoft rejection of the sender (5.7.x) stops sending for the day. Turning it off returns to the manual queue.
+
 ## Boundaries
 
 - Text tasks, tool calls and inline image inputs (for example, a post written from an uploaded photo) are supported. Image generation continues through the existing Alora provider path.

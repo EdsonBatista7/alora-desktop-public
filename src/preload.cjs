@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld('aloraDesktop', {
   fila: () => invoke('alora:fila'),
   enviar: (ids, intervalo) => invoke('alora:enviar', ids, intervalo),
   parar: () => invoke('alora:parar'),
+  automatico: () => invoke('alora:automatico'),
+  salvarAutomatico: (patch) => invoke('alora:automatico-salvar', patch),
+  onAutomatico: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('alora:automatico', listener);
+    return () => ipcRenderer.removeListener('alora:automatico', listener);
+  },
   onEnvio: (callback) => {
     const listener = (_event, value) => callback(value);
     ipcRenderer.on('alora:envio', listener);
