@@ -456,7 +456,7 @@ async function enviarEmails(ids, intervaloSegundos) {
       }
       let envio;
       try {
-        const { messageId } = await enviarSmtp(preparado.smtp, { para: preparado.para, assunto: preparado.assunto, corpo: preparado.corpo });
+        const { messageId } = await enviarSmtp(preparado.smtp, { para: preparado.para, assunto: preparado.assunto, corpo: preparado.corpo, html: preparado.html, descadastro: preparado.descadastro });
         envio = { ok: true, messageId };
       } catch (error) { envio = { ok: false, erro: safeMessage(error), incerto: !!error?.incerto }; }
       try { await concluirComRetentativa({ id, ticket: preparado.ticket, ...envio }); }

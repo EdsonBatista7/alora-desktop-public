@@ -76,3 +76,15 @@ test('endereço inválido não chega a conectar', () => {
   assert.match(mensagem, /Date: Tue, 20 Oct 2026 12:00:00 \+0000/);
   assert.match(mensagem, /Message-ID: <id1@b\.com>/);
 });
+
+test('com HTML vai texto + HTML (multipart) e List-Unsubscribe', () => {
+  const { mensagem } = montarMensagem({ de: 'a@b.com', para: 'c@d.com', assunto: 'Oi', corpo: 'texto', html: '<p>oi <a href="https://x.y/z">clique aqui</a></p>', descadastro: 'https://x.y/z' }, { id: 'id2' });
+  assert.match(mensagem, /Content-Type: multipart\/alternative; boundary="alora-/);
+  assert.match(mensagem, /Content-Type: text\/plain; charset="UTF-8"/);
+  assert.match(mensagem, /Content-Type: text\/html; charset="UTF-8"/);
+  assert.match(mensagem, /List-Unsubscribe: <https:\/\/x\.y\/z>/);
+  const partes = [...mensagem.matchAll(/base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8'));
+  assert.deepEqual(partes, ['texto', '<p>oi <a href="https://x.y/z">clique aqui</a></p>']);
+  const simples = montarMensagem({ de: 'a@b.com', para: 'c@d.com', assunto: 'Oi', corpo: 'x', descadastro: 'javascript:alert(1)' }).mensagem;
+  assert.doesNotMatch(simples, /multipart|List-Unsubscribe/);
+});

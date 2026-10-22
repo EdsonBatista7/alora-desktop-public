@@ -23,8 +23,12 @@ export function respostaXoauth2(usuario, accessToken) {
   return Buffer.from(`user=${usuario}\x01auth=Bearer ${accessToken}\x01\x01`, 'utf8').toString('base64');
 }
 
-/** Mensagem completa (RFC 5322) com remetente, data e Message-ID do domínio da conta. */
-export function montarMensagem({ de, nome, para, assunto, corpo }, opcoes = {}) {
+/**
+ * Mensagem completa (RFC 5322) com remetente, data e Message-ID do domínio da conta. Com `html`,
+ * vai como multipart/alternative (texto + HTML: o "clique aqui" do descadastro tem link); com
+ * `descadastro`, leva o cabeçalho List-Unsubscribe que Outlook e Gmail mostram como "Cancelar inscrição".
+ */
+export function montarMensagem({ de, nome, para, assunto, corpo, html, descadastro }, opcoes = {}) {
   const remetente = endereco(de); const destino = endereco(para);
   const dominio = remetente.split('@')[1];
   const messageId = `<${opcoes.id ?? randomUUID()}@${dominio}>`;
@@ -32,9 +36,19 @@ export function montarMensagem({ de, nome, para, assunto, corpo }, opcoes = {}) 
   const linhas = [
     `From: ${nomeLimpo ? `${cabecalhoTexto(nomeLimpo)} <${remetente}>` : remetente}`, `To: ${destino}`,
     `Subject: ${cabecalhoTexto(semQuebra(assunto) || '(sem assunto)')}`, `Date: ${(opcoes.agora ?? new Date()).toUTCString().replace('GMT', '+0000')}`,
-    `Message-ID: ${messageId}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
-    base64Linhas(String(corpo ?? '')), '',
+    `Message-ID: ${messageId}`, 'MIME-Version: 1.0',
   ];
+  const sair = /^https:\/\/[^\s<>]+$/.test(String(descadastro ?? '')) ? String(descadastro) : '';
+  if (sair) linhas.push(`List-Unsubscribe: <${sair}>`);
+  if (html) {
+    const fronteira = `alora-${randomUUID()}`;
+    linhas.push(`Content-Type: multipart/alternative; boundary="${fronteira}"`, '',
+      `--${fronteira}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', base64Linhas(String(corpo ?? '')),
+      `--${fronteira}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', base64Linhas(String(html)),
+      `--${fronteira}--`, '');
+  } else {
+    linhas.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', base64Linhas(String(corpo ?? '')), '');
+  }
   return { mensagem: linhas.join('\r\n'), messageId, remetente, destino };
 }
 
@@ -86,9 +100,9 @@ const tlsPadrao = (socket, host) => new Promise((ok, erro) => {
 });
 
 /** Envia um e-mail; devolve o Message-ID. `smtp` = { host, port?, usuario, accessToken, nome? }. */
-export async function enviarSmtp(smtp, { para, assunto, corpo }, deps = {}) {
+export async function enviarSmtp(smtp, { para, assunto, corpo, html, descadastro }, deps = {}) {
   const prazo = deps.prazoMs ?? 30_000;
-  const { mensagem, messageId, remetente, destino } = montarMensagem({ de: smtp.usuario, nome: smtp.nome, para, assunto, corpo });
+  const { mensagem, messageId, remetente, destino } = montarMensagem({ de: smtp.usuario, nome: smtp.nome, para, assunto, corpo, html, descadastro });
   let socket = (deps.conectar ?? conectarPadrao)(smtp.host, smtp.port ?? 587);
   let r = leitor(socket, prazo); let enviado = false;
   const passo = async (etapa, linha, esperado) => {
