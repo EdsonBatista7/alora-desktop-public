@@ -89,6 +89,7 @@ function mostrarAutomatico(a) {
   if (!a) return;
   $('autoToggle').checked = a.ativo === true;
   $('autoIntervalo').value = String(a.intervaloSegundos ?? 90);
+  if (a.janela) $('autoJanela').value = a.janela;
   const proximo = a.proximo ? new Date(a.proximo).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
   $('autoStatus').textContent = a.ativo ? `${a.motivo || 'Ligado.'}${proximo ? ` Próxima conferência às ${proximo}.` : ''}` : 'Desligado: envie pela lista abaixo.';
 }
@@ -98,6 +99,7 @@ async function salvarAutomatico(patch) {
 }
 $('autoToggle').addEventListener('change', (e) => { void salvarAutomatico({ ativo: e.target.checked }); });
 $('autoIntervalo').addEventListener('change', (e) => { void salvarAutomatico({ intervaloSegundos: Number(e.target.value) }); });
+$('autoJanela').addEventListener('change', (e) => { void salvarAutomatico({ janela: e.target.value }); });
 api.onAutomatico(mostrarAutomatico);
 api.automatico().then(mostrarAutomatico).catch(() => {});
 

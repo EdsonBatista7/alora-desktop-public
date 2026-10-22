@@ -6,6 +6,17 @@
 
 export const PADRAO = { ativo: false, intervaloSegundos: 90, inicio: 8, fim: 18, fimDeSemana: false };
 export const CICLO_MS = 5 * 60 * 1000;
+/** Janelas de envio que a pessoa escolhe na tela. */
+export const JANELAS = {
+  comercial: { inicio: 8, fim: 18, fimDeSemana: false },
+  '24h_uteis': { inicio: 0, fim: 24, fimDeSemana: false },
+  '24h_todos': { inicio: 0, fim: 24, fimDeSemana: true },
+};
+/** Qual janela as preferências representam (para mostrar na tela). */
+export function janelaDe(p) {
+  if (p.inicio === 0 && p.fim === 24) return p.fimDeSemana ? '24h_todos' : '24h_uteis';
+  return 'comercial';
+}
 
 const inteiro = (v, min, max, padrao) => { const n = Math.trunc(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : padrao; };
 

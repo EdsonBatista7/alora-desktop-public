@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { estadoDepoisDoLote, idsParaEnviar, normalizarPreferencias, podeEnviarAgora } from '../src/envio-automatico.js';
+import { estadoDepoisDoLote, idsParaEnviar, JANELAS, janelaDe, normalizarPreferencias, podeEnviarAgora } from '../src/envio-automatico.js';
 
 const quarta10h = new Date(2026, 9, 21, 10, 0);
 const sabado10h = new Date(2026, 9, 24, 10, 0);
@@ -29,4 +29,16 @@ test('envia só ligado, em dia útil e no horário; descansa no dia em que a cot
 test('ids da fila: só os válidos, com teto', () => {
   assert.deepEqual(idsParaEnviar([{ id: 'a' }, {}, null, { id: 'b' }]), ['a', 'b']);
   assert.equal(idsParaEnviar(Array.from({ length: 300 }, (_, i) => ({ id: String(i) }))).length, 200);
+});
+
+test('janela 24 horas: envia de madrugada; todos os dias inclui o fim de semana', () => {
+  const madrugada = new Date(2026, 9, 21, 3, 0); const sabado3h = new Date(2026, 9, 24, 3, 0);
+  const uteis = normalizarPreferencias({ ativo: true, ...JANELAS['24h_uteis'] });
+  const todos = normalizarPreferencias({ ativo: true, intervaloSegundos: 30, ...JANELAS['24h_todos'] });
+  assert.equal(podeEnviarAgora(madrugada, uteis).pode, true);
+  assert.equal(podeEnviarAgora(sabado3h, uteis).pode, false);
+  assert.equal(podeEnviarAgora(sabado3h, todos).pode, true);
+  assert.equal(podeEnviarAgora(new Date(2026, 9, 21, 23, 59), todos).pode, true);
+  assert.equal(todos.intervaloSegundos, 30);
+  assert.deepEqual([janelaDe(normalizarPreferencias({})), janelaDe(uteis), janelaDe(todos)], ['comercial', '24h_uteis', '24h_todos']);
 });

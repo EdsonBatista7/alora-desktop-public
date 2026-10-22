@@ -8,7 +8,7 @@ import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { reasoningEfforts } from './model-capabilities.js';
 import { executarTarefaResponses } from './responses-executor.js';
 import { enviarSmtp } from './smtp.js';
-import { CICLO_MS, estadoDepoisDoLote, idsParaEnviar, normalizarPreferencias, podeEnviarAgora } from './envio-automatico.js';
+import { CICLO_MS, estadoDepoisDoLote, idsParaEnviar, JANELAS, janelaDe, normalizarPreferencias, podeEnviarAgora } from './envio-automatico.js';
 
 const APP_VERSION = app.getVersion();
 const ALORA_API = 'https://app.sintoniaads.com';
@@ -488,20 +488,24 @@ let prefsEnvio = normalizarPreferencias({});
 let estadoAuto = {};
 let autoTimer = null;
 let autoStatus = { proximo: null, motivo: '' };
-const avisarAuto = () => mainWindow?.webContents.send('alora:automatico', { ...prefsEnvio, ...autoStatus });
+const avisarAuto = () => mainWindow?.webContents.send('alora:automatico', { ...prefsEnvio, janela: janelaDe(prefsEnvio), ...autoStatus });
 
 async function carregarPrefsEnvio() {
   try { prefsEnvio = normalizarPreferencias(JSON.parse(await readFile(prefsPath(), 'utf8'))); } catch { prefsEnvio = normalizarPreferencias({}); }
 }
 
 async function salvarPrefsEnvio(patch) {
-  prefsEnvio = normalizarPreferencias({ ...prefsEnvio, ...(patch && typeof patch === 'object' ? patch : {}) });
+  const pedido = patch && typeof patch === 'object' ? { ...patch } : {};
+  // A tela manda a janela pelo nome (comercial, 24h_uteis, 24h_todos); vira início, fim e fim de semana.
+  if (typeof pedido.janela === 'string' && JANELAS[pedido.janela]) Object.assign(pedido, JANELAS[pedido.janela]);
+  delete pedido.janela;
+  prefsEnvio = normalizarPreferencias({ ...prefsEnvio, ...pedido });
   const tmp = `${prefsPath()}.tmp`;
   await writeFile(tmp, JSON.stringify(prefsEnvio), 'utf8'); await rename(tmp, prefsPath());
   // Automático só funciona com o programa aberto: abre junto com o Windows (minimizado).
   try { app.setLoginItemSettings({ openAtLogin: prefsEnvio.ativo, args: ['--minimizado'] }); } catch { /* sem permissão: segue */ }
   agendarAuto(prefsEnvio.ativo ? 3000 : null);
-  return { ...prefsEnvio, ...autoStatus };
+  return { ...prefsEnvio, janela: janelaDe(prefsEnvio), ...autoStatus };
 }
 
 function agendarAuto(ms) {
@@ -562,7 +566,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('alora:fila', () => filaEmails());
   ipcMain.handle('alora:enviar', (_event, ids, intervalo) => enviarEmails(ids, intervalo));
   ipcMain.handle('alora:parar', () => { if (envioEmails.ativo) envioEmails.parar = true; return true; });
-  ipcMain.handle('alora:automatico', () => ({ ...prefsEnvio, ...autoStatus }));
+  ipcMain.handle('alora:automatico', () => ({ ...prefsEnvio, janela: janelaDe(prefsEnvio), ...autoStatus }));
   ipcMain.handle('alora:automatico-salvar', (_event, patch) => salvarPrefsEnvio(patch));
   await carregarPrefsEnvio();
   agendarAuto(prefsEnvio.ativo ? 20_000 : null);
