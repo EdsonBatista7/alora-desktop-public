@@ -9,7 +9,7 @@ const quarta19h = new Date(2026, 9, 21, 19, 0);
 test('preferências: padrão desligado, intervalo e horário dentro dos limites', () => {
   assert.deepEqual(normalizarPreferencias(null), { ativo: false, intervaloSegundos: 90, inicio: 8, fim: 18, fimDeSemana: false });
   const p = normalizarPreferencias({ ativo: true, intervaloSegundos: 5, inicio: 20, fim: 9 });
-  assert.equal(p.intervaloSegundos, 30);
+  assert.equal(p.intervaloSegundos, 10);
   assert.equal(p.fim > p.inicio, true);
 });
 

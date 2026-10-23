@@ -27,7 +27,7 @@ export function normalizarPreferencias(bruto) {
   const fim = inteiro(b.fim, 1, 24, PADRAO.fim);
   return {
     ativo: b.ativo === true,
-    intervaloSegundos: inteiro(b.intervaloSegundos, 30, 900, PADRAO.intervaloSegundos),
+    intervaloSegundos: inteiro(b.intervaloSegundos, 10, 900, PADRAO.intervaloSegundos),
     ...(fim > inicio ? { inicio, fim } : { inicio: PADRAO.inicio, fim: PADRAO.fim }),
     fimDeSemana: b.fimDeSemana === true,
   };

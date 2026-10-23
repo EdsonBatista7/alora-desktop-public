@@ -1,6 +1,6 @@
 {
   "name": "alora-desktop-agent",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": false,
   "type": "module",
   "description": "Local, open-source desktop companion for Alora text generation using the signed-in user's ChatGPT plan.",
@@ -65,7 +65,7 @@
       "shortcutName": "Alora Desktop"
     },
     "nsisWeb": {
-      "appPackageUrl": "https://github.com/EdsonBatista7/alora-desktop-public/releases/download/v0.1.10/alora-desktop-agent-0.1.10-x64.nsis.7z",
+      "appPackageUrl": "https://github.com/EdsonBatista7/alora-desktop-public/releases/download/v0.1.11/alora-desktop-agent-0.1.11-x64.nsis.7z",
       "artifactName": "Alora-Desktop-Setup-${version}-x64.${ext}",
       "oneClick": false,
       "perMachine": false,
